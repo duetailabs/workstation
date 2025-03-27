@@ -1,0 +1,10 @@
+steps:
+- name: 'gcr.io/cloud-builders/git'
+  args: ['clone', 'https://github.com/duetailabs/workstation.git']
+- name: 'gcr.io/cloud-builders/gcloud'
+  args: ['builds', 'submit', 'workstation', '--substitutions=_IMAGE_URL=$_IMAGE_URL']
+options:
+  dynamicSubstitutions: true
+  logging: CLOUD_LOGGING_ONLY
+substitutions:
+  _IMAGE_URL: 'us-central1-docker.pkg.dev/$PROJECT_ID/demo/demo-workstation:latest'
