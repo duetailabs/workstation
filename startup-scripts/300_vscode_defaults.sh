@@ -7,6 +7,7 @@ mkdir -p $SETTINGS_PATH
 cat << EOF > $SETTINGS_PATH/settings.json
 {
     "workbench.colorTheme": "Default Dark+",
+    "chat.commandCenter.enabled": false,
 }
 EOF
 
