@@ -1,0 +1,114 @@
+steps:
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: 'ListWorkstations'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - |
+      gcloud workstations list --format=json --project $PROJECT_ID > workstations.json
+
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: 'Print Stats'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - |
+      # install jq
+      apt-get install -y -qq jq &> /dev/null
+      echo "jq version: $(jq --version)"
+
+      echo "Calculating workstation usage statistics..."
+
+      # Timestamps for comparison (seconds since epoch)
+      ts_1d_ago=$(date -d '1 day ago' +%s)
+      ts_7d_ago=$(date -d '7 days ago' +%s)
+      ts_14d_ago=$(date -d '14 days ago' +%s)
+      ts_28d_ago=$(date -d '28 days ago' +%s)
+
+      # Read the JSON content once to avoid multiple file reads
+      workstations_data=$(cat workstations.json)
+
+      # Count total workstations
+      total_workstations=$(echo "$workstations_data" | jq '. | length')
+
+      # Count workstations never started (startTime is null or empty)
+      never_started_count=$(echo "$workstations_data" | jq 'map(select(.startTime == null or .startTime == "")) | length')
+
+      # Count active workstations for different periods
+      # Active means startTime is within the period.
+      # ((.startTime | .[0:19] +"Z" | fromdateiso8601) // -1) handles potential null from fromdateiso8601 for invalid dates.
+      active_1d_count=$(echo "$workstations_data" | jq --argjson p_start "$ts_1d_ago" \
+        'map(select(.startTime != null and .startTime != "" and ((.startTime | .[0:19] +"Z" | fromdateiso8601) // -1) >= $p_start)) | length')
+      active_7d_count=$(echo "$workstations_data" | jq --argjson p_start "$ts_7d_ago" \
+        'map(select(.startTime != null and .startTime != "" and ((.startTime | .[0:19] +"Z" | fromdateiso8601) // -1) >= $p_start)) | length')
+      active_14d_count=$(echo "$workstations_data" | jq --argjson p_start "$ts_14d_ago" \
+        'map(select(.startTime != null and .startTime != "" and ((.startTime | .[0:19] +"Z" | fromdateiso8601) // -1) >= $p_start)) | length')
+      active_28d_count=$(echo "$workstations_data" | jq --argjson p_start "$ts_28d_ago" \
+        'map(select(.startTime != null and .startTime != "" and ((.startTime | .[0:19] +"Z" | fromdateiso8601) // -1) >= $p_start)) | length')
+
+      echo ""
+      echo "----------------------------------------"
+      echo "Cloud Workstation Usage Statistics"
+      echo "----------------------------------------"
+      echo "Total Workstations: $total_workstations"
+      echo "Active Workstations (Last Started):"
+      echo "  - Last 1 Day:   $active_1d_count"
+      echo "  - Last 7 Days:  $active_7d_count"
+      echo "  - Last 14 Days: $active_14d_count"
+      echo "  - Last 28 Days: $active_28d_count"
+      echo "Workstations Never Started: $never_started_count"
+      echo "----------------------------------------"
+
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: 'DeleteOldWorkstations'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - |
+      # install jq
+      apt-get install -y -qq jq &> /dev/null
+
+      # Check if workstations.json exists and is not empty to avoid errors.
+      if [ ! -s workstations.json ]; then
+        echo "workstations.json not found or is empty. No workstations to process."
+        exit 0
+      fi
+
+      # Calculate the cutoff timestamp (seconds since epoch) for 30 days ago.
+      # The 'fromdateiso8601' jq function will convert the workstation's createTime
+      # to a Unix timestamp for comparison.
+      deleted_count=0
+      cutoff_ts=$(date -d '30 days ago' +%s)
+      echo "Searching for workstations created before $(date -d @$cutoff_ts) AND (never started OR last started before $(date -d @$cutoff_ts))"
+
+      # Use jq to filter workstations and extract their full resource name, then
+      # pipe the names to a while loop to process each one.
+      jq -r --argjson ts "$cutoff_ts" '
+      .[] |
+      select(
+        (.createTime | .[0:19] +"Z" | fromdateiso8601 < $ts) and
+        (
+          .startTime == null or
+          .startTime == "" or
+          ((.startTime | .[0:19] +"Z" | fromdateiso8601) < $ts)
+        )
+      ) | .name
+      ' workstations.json | \
+      while read -r name; do
+        echo "Found old workstation to delete: $name"
+
+        # Parse the required components from the full resource path using 'cut'.
+        region=$(echo "$name" | cut -d'/' -f4)
+        cluster=$(echo "$name" | cut -d'/' -f6)
+        workstation=$(echo "$name" | cut -d'/' -f10)
+
+        echo "--> Issuing delete command for workstation '$workstation' in cluster '$cluster' (region: $region)..."
+        gcloud workstations delete "$workstation" --cluster="$cluster" --region="$region" --quiet --async
+        deleted_count=$((deleted_count + 1))
+      done
+      echo "Finished processing workstations. Deleted $deleted_count workstation(s)."
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: '1200s'
