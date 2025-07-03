@@ -14,6 +14,9 @@ RUN git clone https://github.com/zsh-users/zsh-autosuggestions /opt/workstation/
   && git clone https://github.com/zsh-users/zsh-completions.git /opt/workstation/zsh/plugins/zsh-completions \
   && git clone https://github.com/spaceship-prompt/spaceship-prompt.git  /opt/workstation/zsh/themes/spaceship
 
+# Install global NPM Modules
+RUN npm install -g @google/gemini-cli
+
 # Runtime customization scripts
 COPY startup-scripts/ /etc/workstation-startup.d/
 RUN chmod +x /etc/workstation-startup.d/*
